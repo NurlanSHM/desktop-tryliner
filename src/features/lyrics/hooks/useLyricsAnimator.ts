@@ -1,4 +1,10 @@
 import { useEffect, useRef, useCallback } from "react";
+import {
+  CROSSFADE_MS,
+  PREWARM_MS,
+  getActiveLineIndices,
+  wordEmphasis,
+} from "./lyricsTiming";
 
 export interface LyricsWord {
   timeMs: number;
@@ -36,6 +42,9 @@ export function useLyricsAnimator({
 
   const anchorPosRef = useRef(positionMs);
   const anchorTimeRef = useRef(performance.now());
+  const lastSeekTimeRef = useRef(Number.NEGATIVE_INFINITY);
+  const trueLineIndicesRef = useRef<number[]>([]);
+  const outgoingFillLineIndicesRef = useRef<number[]>([]);
   const activeLineIndicesRef = useRef<number[]>([]);
 
   const wordSpansByLine = useRef<Map<number, HTMLElement[]>>(new Map());
@@ -69,6 +78,9 @@ export function useLyricsAnimator({
       if (Math.abs(currentExtrapolated - positionMs) > 150) {
         anchorPosRef.current = positionMs;
         anchorTimeRef.current = now;
+        lastSeekTimeRef.current = now;
+        trueLineIndicesRef.current = [];
+        outgoingFillLineIndicesRef.current = [];
       }
     }
   }, [positionMs]);
@@ -79,6 +91,8 @@ export function useLyricsAnimator({
 
   useEffect(() => {
     syncedLinesRef.current = syncedLines;
+    trueLineIndicesRef.current = [];
+    outgoingFillLineIndicesRef.current = [];
   }, [syncedLines]);
 
   useEffect(() => {
@@ -130,6 +144,9 @@ export function useLyricsAnimator({
   );
 
   useEffect(() => {
+    const reducedMotionQuery = window.matchMedia?.(
+      "(prefers-reduced-motion: reduce)",
+    );
     let rafId: number;
 
     const tick = () => {
@@ -145,32 +162,35 @@ export function useLyricsAnimator({
           )
         : anchorPosRef.current;
 
-      let newMainLineIndex = -1;
-      if (isSynced && lines.length > 0) {
-        for (let i = 0; i < lines.length; i++) {
-          if (estimated >= lines[i].timeMs) {
-            if (!lines[i].text.match(/^\s*<[^>]+>/)) {
-              newMainLineIndex = i;
-            }
-          } else {
-            break;
-          }
-        }
-      }
+      const reduceMotion = reducedMotionQuery?.matches === true;
+      const bufferMs = reduceMotion ? 0 : CROSSFADE_MS;
 
-      const newActiveIndices: number[] = [];
-      if (newMainLineIndex >= 0) {
-        newActiveIndices.push(newMainLineIndex);
-        for (let i = newMainLineIndex + 1; i < lines.length; i++) {
-          if (lines[i].text.match(/^\s*<[^>]+>/)) {
-            if (estimated >= lines[i].timeMs) {
-              newActiveIndices.push(i);
-            }
-          } else {
-            break;
-          }
-        }
-      }
+      // Word fill follows the real clock (trueIndices). The line-change callback
+      // looks PREWARM_MS ahead so the DOM update and CSS transition are already
+      // under way at the beat. No lead while paused/seeking or with reduced motion.
+      const seeking = now - lastSeekTimeRef.current < 150;
+      const lead = playing && !seeking && !reduceMotion ? PREWARM_MS : 0;
+      const trueIndices = isSynced ? getActiveLineIndices(lines, estimated) : [];
+      const newActiveIndices =
+        isSynced && lead > 0
+          ? getActiveLineIndices(lines, estimated + lead)
+          : trueIndices;
+
+      const getLastWordEnd = (idx: number) => {
+        const words = wordDataByLine.current.get(idx);
+        return (
+          words?.reduce((end, word) => Math.max(end, word.endMs), -Infinity) ??
+          -Infinity
+        );
+      };
+      const outgoingFillIndices = [
+        ...new Set([
+          ...outgoingFillLineIndicesRef.current,
+          ...trueLineIndicesRef.current.filter((i) => !trueIndices.includes(i)),
+        ]),
+      ].filter((i) => !trueIndices.includes(i) && getLastWordEnd(i) > estimated);
+      trueLineIndicesRef.current = trueIndices;
+      outgoingFillLineIndicesRef.current = outgoingFillIndices;
 
       let changed =
         newActiveIndices.length !== activeLineIndicesRef.current.length;
@@ -188,7 +208,20 @@ export function useLyricsAnimator({
         onActiveLineChangeRef.current(newActiveIndices);
       }
 
-      for (const idx of newActiveIndices) {
+      // Pre-warmed lines need their fill initialised. Outgoing lines keep filling
+      // until their last word ends on the real clock.
+      const fillIndices =
+        newActiveIndices === trueIndices && outgoingFillIndices.length === 0
+          ? trueIndices
+          : [
+              ...new Set([
+                ...trueIndices,
+                ...newActiveIndices,
+                ...outgoingFillIndices,
+              ]),
+            ];
+
+      for (const idx of fillIndices) {
         const spans = wordSpansByLine.current.get(idx);
         const words = wordDataByLine.current.get(idx);
         if (spans && words && spans.length === words.length) {
@@ -214,6 +247,11 @@ export function useLyricsAnimator({
 
             if (span.style.backgroundImage !== bg) {
               span.style.backgroundImage = bg;
+            }
+
+            const emphasis = wordEmphasis(estimated, w, bufferMs).toFixed(3);
+            if (span.style.getPropertyValue("--word-emphasis") !== emphasis) {
+              span.style.setProperty("--word-emphasis", emphasis);
             }
           }
         }
