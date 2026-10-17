@@ -81,7 +81,7 @@ const TAG_PREFIXED_LINE = /^\s*<[^>]+>/;
  * Indices of the lines that are active at `ms`: the last non-tag line whose
  * timeMs has been reached, plus any tag-prefixed lines directly after it that
  * have also been reached. Same rules as the loops that used to live inline in
- * useLyricsAnimator. Call it with `estimated + PREWARM_MS` to pre-warm.
+ * useLyricsAnimator. Call it with the real time plus a capped pre-warm lead.
  */
 export function getActiveLineIndices(
   lines: ReadonlyArray<TimedLine>,
@@ -108,4 +108,40 @@ export function getActiveLineIndices(
     }
   }
   return active;
+}
+
+/**
+ * Limit the projected clock to the next line boundary. When lines are close
+ * together, this shortens the pre-warm so a later line cannot replace the next
+ * line before that next line has started.
+ */
+export function getPrewarmLeadMs(
+  lines: ReadonlyArray<TimedLine>,
+  estimatedMs: number,
+  maxLeadMs = PREWARM_MS,
+): number {
+  const maxLead = Number.isFinite(maxLeadMs) ? Math.max(0, maxLeadMs) : 0;
+  if (!Number.isFinite(estimatedMs) || maxLead === 0) return 0;
+
+  const nextLine = lines.find((line) => line.timeMs > estimatedMs);
+  return nextLine
+    ? Math.min(maxLead, nextLine.timeMs - estimatedMs)
+    : maxLead;
+}
+
+/** Lines whose final timed word is still being sung stay active through that word. */
+export function getUnfinishedOutgoingLineIndices(
+  candidateIndices: ReadonlyArray<number>,
+  prewarmedIndices: ReadonlyArray<number>,
+  lastWordEndByLine: ReadonlyMap<number, number>,
+  estimatedMs: number,
+): number[] {
+  const prewarmed = new Set(prewarmedIndices);
+  return [...new Set(candidateIndices)]
+    .filter(
+      (index) =>
+        !prewarmed.has(index) &&
+        (lastWordEndByLine.get(index) ?? -Infinity) > estimatedMs,
+    )
+    .sort((a, b) => a - b);
 }

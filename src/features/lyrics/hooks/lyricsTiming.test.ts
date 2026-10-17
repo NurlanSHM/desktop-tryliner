@@ -5,6 +5,8 @@ import {
   crossfade,
   easeInOutCubic,
   getActiveLineIndices,
+  getPrewarmLeadMs,
+  getUnfinishedOutgoingLineIndices,
   wordEmphasis,
 } from "./lyricsTiming";
 
@@ -162,5 +164,36 @@ describe("getActiveLineIndices", () => {
 
   it("pre-warm window is wide enough to contain the crossfade start", () => {
     expect(PREWARM_MS).toBeGreaterThanOrEqual(CROSSFADE_MS / 2);
+  });
+
+  it("shortens pre-warm to stop at the next line boundary", () => {
+    const closeLines = [
+      { timeMs: 1000, text: "First" },
+      { timeMs: 1080, text: "Second" },
+      { timeMs: 1120, text: "Third" },
+    ];
+
+    const firstLead = getPrewarmLeadMs(closeLines, 900);
+    expect(firstLead).toBe(100);
+    expect(getActiveLineIndices(closeLines, 900 + firstLead)).toEqual([0]);
+
+    const secondLead = getPrewarmLeadMs(closeLines, 1000);
+    expect(secondLead).toBe(80);
+    expect(getActiveLineIndices(closeLines, 1000 + secondLead)).toEqual([1]);
+
+    const thirdLead = getPrewarmLeadMs(closeLines, 1080);
+    expect(thirdLead).toBe(40);
+    expect(getActiveLineIndices(closeLines, 1080 + thirdLead)).toEqual([2]);
+  });
+
+  it("keeps an outgoing line active through its final timed word", () => {
+    const lastWordEnds = new Map([[0, 2100]]);
+
+    expect(
+      getUnfinishedOutgoingLineIndices([0], [1], lastWordEnds, 2099),
+    ).toEqual([0]);
+    expect(
+      getUnfinishedOutgoingLineIndices([0], [1], lastWordEnds, 2100),
+    ).toEqual([]);
   });
 });

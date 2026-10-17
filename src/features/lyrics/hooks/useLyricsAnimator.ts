@@ -3,6 +3,8 @@ import {
   CROSSFADE_MS,
   PREWARM_MS,
   getActiveLineIndices,
+  getPrewarmLeadMs,
+  getUnfinishedOutgoingLineIndices,
   wordEmphasis,
 } from "./lyricsTiming";
 
@@ -166,29 +168,46 @@ export function useLyricsAnimator({
       const bufferMs = reduceMotion ? 0 : CROSSFADE_MS;
 
       // Word fill follows the real clock (trueIndices). The line-change callback
-      // looks PREWARM_MS ahead so the DOM update and CSS transition are already
-      // under way at the beat. No lead while paused/seeking or with reduced motion.
+      // looks up to PREWARM_MS ahead, capped at the next line boundary so close
+      // lines are not skipped. No lead while paused/seeking or with reduced motion.
       const seeking = now - lastSeekTimeRef.current < 150;
-      const lead = playing && !seeking && !reduceMotion ? PREWARM_MS : 0;
+      const requestedLead =
+        playing && !seeking && !reduceMotion ? PREWARM_MS : 0;
       const trueIndices = isSynced ? getActiveLineIndices(lines, estimated) : [];
-      const newActiveIndices =
-        isSynced && lead > 0
+      const lead = isSynced
+        ? getPrewarmLeadMs(lines, estimated, requestedLead)
+        : 0;
+      const prewarmedIndices =
+        lead > 0
           ? getActiveLineIndices(lines, estimated + lead)
           : trueIndices;
 
       const getLastWordEnd = (idx: number) => {
-        const words = wordDataByLine.current.get(idx);
+        const words = wordDataByLine.current.get(idx) ?? lines[idx]?.words;
         return (
           words?.reduce((end, word) => Math.max(end, word.endMs), -Infinity) ??
           -Infinity
         );
       };
-      const outgoingFillIndices = [
+      const outgoingCandidates = [
         ...new Set([
           ...outgoingFillLineIndicesRef.current,
-          ...trueLineIndicesRef.current.filter((i) => !trueIndices.includes(i)),
+          ...trueLineIndicesRef.current,
+          ...trueIndices,
         ]),
-      ].filter((i) => !trueIndices.includes(i) && getLastWordEnd(i) > estimated);
+      ];
+      const lastWordEndByLine = new Map(
+        outgoingCandidates.map((index) => [index, getLastWordEnd(index)]),
+      );
+      const outgoingFillIndices = getUnfinishedOutgoingLineIndices(
+        outgoingCandidates,
+        prewarmedIndices,
+        lastWordEndByLine,
+        estimated,
+      );
+      const newActiveIndices = [
+        ...new Set([...prewarmedIndices, ...outgoingFillIndices]),
+      ].sort((a, b) => a - b);
       trueLineIndicesRef.current = trueIndices;
       outgoingFillLineIndicesRef.current = outgoingFillIndices;
 
@@ -210,16 +229,9 @@ export function useLyricsAnimator({
 
       // Pre-warmed lines need their fill initialised. Outgoing lines keep filling
       // until their last word ends on the real clock.
-      const fillIndices =
-        newActiveIndices === trueIndices && outgoingFillIndices.length === 0
-          ? trueIndices
-          : [
-              ...new Set([
-                ...trueIndices,
-                ...newActiveIndices,
-                ...outgoingFillIndices,
-              ]),
-            ];
+      const fillIndices = [
+        ...new Set([...trueIndices, ...newActiveIndices]),
+      ];
 
       for (const idx of fillIndices) {
         const spans = wordSpansByLine.current.get(idx);
