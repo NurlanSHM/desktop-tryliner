@@ -189,11 +189,31 @@ describe("getActiveLineIndices", () => {
   it("keeps an outgoing line active through its final timed word", () => {
     const lastWordEnds = new Map([[0, 2100]]);
 
+    const lines = [
+      { timeMs: 1000, text: "Earlier line" },
+      { timeMs: 2000, text: "Next line" },
+    ];
     expect(
-      getUnfinishedOutgoingLineIndices([0], [1], lastWordEnds, 2099),
+      getUnfinishedOutgoingLineIndices([0], [1], lastWordEnds, 2099, lines),
     ).toEqual([0]);
     expect(
-      getUnfinishedOutgoingLineIndices([0], [1], lastWordEnds, 2100),
+      getUnfinishedOutgoingLineIndices([0], [1], lastWordEnds, 2100, lines),
+    ).toEqual([]);
+  });
+
+  it("drops a stale outgoing line that has not started after seeking back", () => {
+    const lines = [
+      { timeMs: 0, text: "Current line" },
+      { timeMs: 3000, text: "Later line" },
+      { timeMs: 6000, text: "Stale future line" },
+    ];
+    const lastWordEnds = new Map([
+      [0, 2500],
+      [2, 9000],
+    ]);
+
+    expect(
+      getUnfinishedOutgoingLineIndices([0, 2], [0], lastWordEnds, 1000, lines),
     ).toEqual([]);
   });
 });
