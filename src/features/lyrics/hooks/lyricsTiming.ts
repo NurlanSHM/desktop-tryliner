@@ -135,12 +135,15 @@ export function getUnfinishedOutgoingLineIndices(
   prewarmedIndices: ReadonlyArray<number>,
   lastWordEndByLine: ReadonlyMap<number, number>,
   estimatedMs: number,
+  lines: ReadonlyArray<TimedLine>,
 ): number[] {
   const prewarmed = new Set(prewarmedIndices);
   return [...new Set(candidateIndices)]
     .filter(
       (index) =>
         !prewarmed.has(index) &&
+        lines[index] !== undefined &&
+        lines[index].timeMs <= estimatedMs &&
         (lastWordEndByLine.get(index) ?? -Infinity) > estimatedMs,
     )
     .sort((a, b) => a - b);
