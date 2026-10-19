@@ -204,6 +204,7 @@ export function useLyricsAnimator({
         prewarmedIndices,
         lastWordEndByLine,
         estimated,
+        lines,
       );
       const newActiveIndices = [
         ...new Set([...prewarmedIndices, ...outgoingFillIndices]),
